@@ -2,8 +2,10 @@ import com.google.gson.Gson;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.text.DateFormat;
@@ -16,8 +18,8 @@ import java.util.concurrent.TimeUnit;
 
 public class MultithreadHashing {
     static PrintStream out;
-    static List<String> listfiles = new ArrayList<>();
-
+    static List<Distribs> listfiles = new ArrayList<Distribs>();
+    static List<String> files = new ArrayList<String>();
 
     public static void main(String[] args) throws IOException {
         Properties properties = new Properties();
@@ -25,6 +27,9 @@ public class MultithreadHashing {
 
         out = new PrintStream(new FileOutputStream("ListDistributionstoFile.txt", true));
         System.setErr(out);
+
+        long m = System.currentTimeMillis();
+
         System.err.println("soft start: " + df.format(new Date(System.currentTimeMillis())));
 
         properties.load(new FileInputStream("config.prop"));
@@ -32,26 +37,33 @@ public class MultithreadHashing {
         String outfile = properties.get("outfile").toString();
         int threadcount = Integer.parseInt(properties.getProperty("threadcount"));
 
+
         try {
-            List<String> listdistribs = processFilesFromFolder(new File(distribspath));
-            if (!listdistribs.isEmpty()) {
+
+            List<String> files = processFilesFromFolder(new File(distribspath));
+            //List<Distribs> listdistribs = processFilesFromFolder(new File(distribspath));
+            if (!files.isEmpty()) {
                 ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(threadcount);
-                for (String i : listdistribs) {
-                    System.err.println("path: " + i + " t:" + df.format(new Date(System.currentTimeMillis())));
-                    CalcHash queue1 = new CalcHash(i);
+
+                for (int i = 0; i < files.size(); i++) {
+                    //System.err.println("path: " + files.get(i) + " t:" + df.format(new Date(System.currentTimeMillis())));
+                    CalcHash queue1 = new CalcHash(files.get(i));
 
                     executor.execute(queue1);
                 }
-
-                while (listdistribs.size() != executor.getCompletedTaskCount()) {
-                    System.err.println("count=" + executor.getTaskCount() + "," + executor.getCompletedTaskCount());
+//TODO заменить files.size() на executor.getTaskCount()
+                while (executor.getCompletedTaskCount() != files.size()) {
+                    System.err.print("count=" + executor.getTaskCount() + "," + executor.getCompletedTaskCount());
+                    System.err.printf("  Elapsed minutes: " + TimeUnit.MILLISECONDS.toMinutes((System.currentTimeMillis() - m)));
+                    System.err.println();
                     Thread.sleep(5000);
                 }
                 executor.shutdown();
                 executor.awaitTermination(60, TimeUnit.SECONDS);
             }
 
-            Fileslist.pushtofile(outfile);
+
+            pushtofile(listfiles, outfile);
 
 
         } catch (InterruptedException e) {
@@ -59,10 +71,13 @@ public class MultithreadHashing {
 
         }
         System.err.println("soft stop: " + df.format(new Date(System.currentTimeMillis())));
+
+
         out.close();
     }
 
     public static List<String> processFilesFromFolder(File folder) {
+
 
         try {
 
@@ -73,40 +88,24 @@ public class MultithreadHashing {
                     processFilesFromFolder(entry);
                     continue;
                 }
-                Path filePath = Paths.get(entry.getPath());
 
-                listfiles.add(filePath.toString());
+                files.add(entry.getPath());
 
             }
 
         } catch (SecurityException e) {
             System.err.println("processFilesFromFolder error: " + e);
         }
-        return listfiles;
+        return files;
     }
 
-}
 
-class Fileslist {
-    static public HashMap<String, String> filesMap = new HashMap<>();
-
-
-    public static void setFilesMap(String filepath, String filehash) {
-
-        filesMap.put(filepath, filehash);
-        System.err.println(filepath + filehash);
-    }
-
-    public static void pushtofile(String filename) {
-
-        //push map to file
-        System.err.println("start write to file : ");
+    public static void pushtofile(List<Distribs> fileslist, String filename) {
 
         try {
-            if (!filesMap.isEmpty()) {
-                System.err.println("mapa not empty ");
+            if (!fileslist.isEmpty()) {
                 Gson gson = new Gson();
-                String json = gson.toJson(filesMap);
+                String json = gson.toJson(fileslist);
                 InputStream initialStream = new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8));
                 File targetFile = new File(filename);
                 OutputStream outStream = new FileOutputStream(targetFile);
@@ -121,7 +120,19 @@ class Fileslist {
             System.err.println("function : " + e.getMessage());
         }
     }
+
+
 }
+
+class Distribs {
+
+    protected String filePath;
+    protected String fileHash;
+    protected long fileCreatedtime;
+    protected long size;
+
+}
+
 
 class CalcHash extends Thread {
 
@@ -138,16 +149,25 @@ class CalcHash extends Thread {
 
         try {
 
-            System.err.println(filepath + " thread start: " + df.format(new Date(System.currentTimeMillis())));
-            String hash = hash(filepath, 8 * 1024);
-            System.err.println(filepath + " thread stop: " + df.format(new Date(System.currentTimeMillis())));
-            Fileslist.setFilesMap(filepath, hash);
+            Path filePath = Paths.get(filepath);
+            BasicFileAttributes attr = Files.readAttributes(filePath, BasicFileAttributes.class);
+
+            Distribs distrib = new Distribs();
+            distrib.filePath = filepath;
+
+            distrib.fileCreatedtime = attr.creationTime().to(TimeUnit.MILLISECONDS);
+            distrib.size = attr.size();
+
+            distrib.fileHash = hash(filepath, 8 * 1024);
+
+            MultithreadHashing.listfiles.add(distrib);
 
         } catch (IOException e) {
             System.err.println("CalcHash IOException error: " + e);
         } catch (NoSuchAlgorithmException e) {
             System.err.println("CalcHash NoSuchAlgorithmException error: " + e);
         }
+
 
     }
 
@@ -168,5 +188,9 @@ class CalcHash extends Thread {
         }
         return result.toString();
     }
+
+
 }
+
+
 
